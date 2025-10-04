@@ -19,17 +19,23 @@ enum Commands {
     Save {
         name: String,
         slot: Option<String>,
+        #[arg(short, long, help = "Overwrite without confirmation")]
+        force: bool,
     },
     /// Load NAME into Balatro slot. Format: balsave load [NAME] [SLOT] (SLOT optional, defaults to 1)
     Load {
         name: String,
         slot: Option<String>,
+        #[arg(short, long, help = "Overwrite without confirmation")]
+        force: bool,
     },
     /// Shows all the files in the save directory. Format: balsave list
     List,
     /// Removes save. Format: balsave remove [NAME]
     Remove {
-        name: String
+        name: String,
+        #[arg(short, long, help = "Overwrite without confirmation")]
+        force: bool,
     },
 }
 
@@ -37,14 +43,14 @@ fn main() -> Result<(), BalSaveError> {
     let args = Args::parse();
 
     match args.command {
-        Commands::Save { name, slot } => handle_save(name, slot),
-        Commands::Load { name, slot } => handle_load(name, slot),
+        Commands::Save { name, slot, force } => handle_save(name, slot, force),
+        Commands::Load { name, slot, force } => handle_load(name, slot, force),
         Commands::List => handle_list(),
-        Commands::Remove { name } => handle_remove(name),
+        Commands::Remove { name, force } => handle_remove(name, force),
     }
 }
 
-fn handle_save(name: String, slot: Option<String>) -> Result<(), BalSaveError> {
+fn handle_save(name: String, slot: Option<String>, force: bool) -> Result<(), BalSaveError> {
     let slot = if let Some(s) = slot {
         s.parse::<u8>()
         .map_err(|_| BalSaveError::Validation("Invalid slot number: must be 1, 2, or 3.".into()))?
@@ -69,7 +75,7 @@ fn handle_save(name: String, slot: Option<String>) -> Result<(), BalSaveError> {
             .map_err(|e| BalSaveError::Io(std::io::Error::new(e.kind(), format!("Failed to create destination directory: {}", parent.display()))))?;
     }
 
-    if dest_path.exists() {
+    if dest_path.exists() && !force {
         if !confirm_action(&format!("⚠️ WARNING: Save file '{}' already exists. Overwrite? (y/N): ", name)).unwrap_or(false) {
             return Err(BalSaveError::UserCancellation);
         }
@@ -81,7 +87,7 @@ fn handle_save(name: String, slot: Option<String>) -> Result<(), BalSaveError> {
     Ok(())
 }
 
-fn handle_load(name: String, slot: Option<String>) -> Result<(), BalSaveError> {
+fn handle_load(name: String, slot: Option<String>, force: bool) -> Result<(), BalSaveError> {
     let slot = if let Some(s) = slot {
         s.parse::<u8>()
         .map_err(|_| BalSaveError::Validation("Invalid slot number: must be 1, 2, or 3.".into()))?
@@ -99,8 +105,10 @@ fn handle_load(name: String, slot: Option<String>) -> Result<(), BalSaveError> {
         )));
     }
 
-    if !confirm_action(&format!("⚠️ WARNING: Loading '{}' will OVERWRITE Balatro Slot {}. Proceed? (y/N): ", name, slot)).unwrap_or(false) {
-        return Err(BalSaveError::UserCancellation);
+    if !force {
+        if !confirm_action(&format!("⚠️ WARNING: Loading '{}' will OVERWRITE Balatro Slot {}. Proceed? (y/N): ", name, slot)).unwrap_or(false) {
+            return Err(BalSaveError::UserCancellation);
+        }
     }
     
     if let Some(parent) = dest_path.parent() {
@@ -147,7 +155,7 @@ fn handle_list() -> Result<(), BalSaveError> {
     println!("--------------------------------------");
     Ok(())
 }
-fn handle_remove(name: String) -> Result<(), BalSaveError> {
+fn handle_remove(name: String, force: bool) -> Result<(), BalSaveError> {
     let save_path = saves_path()?.join(&name);
 
     if !save_path.exists() {
@@ -157,8 +165,10 @@ fn handle_remove(name: String) -> Result<(), BalSaveError> {
         )));
     }
 
-    if !confirm_action(&format!("⚠️ WARNING: Permanently delete save file '{}'? (y/N): ", name)).unwrap_or(false) {
-        return Err(BalSaveError::UserCancellation);
+    if !force {
+        if !confirm_action(&format!("⚠️ WARNING: Permanently delete save file '{}'? (y/N): ", name)).unwrap_or(false) {
+            return Err(BalSaveError::UserCancellation);
+        }
     }
 
     fs::remove_file(&save_path)?;
