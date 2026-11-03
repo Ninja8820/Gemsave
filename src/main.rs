@@ -1,51 +1,209 @@
+mod error;
+mod registry;
+
+use std::{fs::{self, read_dir}, path::PathBuf};
 use clap::{Parser, Subcommand};
 
-mod pathing;
-mod commands;
-use crate::{commands::{handle_list, handle_load, handle_remove, handle_save}, error::BalSaveError};
+use crate::{error::{GemError, Result}, registry::Registry};
 
-mod error;
-
-#[derive(Parser, Debug)]
-#[command(version, about = "Balatro Save File Manager (balsave)", long_about = None)]
+#[derive(Parser)]
 struct Args {
     #[command(subcommand)]
     command: Commands,
 }
 
-#[derive(Subcommand, Debug)]
+#[derive(Subcommand)]
 enum Commands {
-    /// Save Balatro slot to NAME. Format: balsave save [NAME] [SLOT] (SLOT optional, defaults to 1)
-    Save {
+    Add {
         name: String,
-        slot: Option<String>,
-        #[arg(short, long, help = "Overwrite without confirmation")]
+        path: PathBuf,
+
+        #[clap(long, short, action)]
         force: bool,
     },
-    /// Load NAME into Balatro slot. Format: balsave load [NAME] [SLOT] (SLOT optional, defaults to 1)
-    Load {
-        name: String,
-        slot: Option<String>,
-        #[arg(short, long, help = "Overwrite without confirmation")]
-        force: bool,
-    },
-    /// Shows all the files in the save directory. Format: balsave list
-    List,
-    /// Removes save. Format: balsave remove [NAME]
     Remove {
         name: String,
-        #[arg(short, long, help = "Overwrite without confirmation")]
+    },
+    Save {
+        game: String,
+        save: String,
+
+        #[clap(long, short, action)]
         force: bool,
+    },
+    Load {
+        game: String,
+        save: String,
+
+        #[clap(long, short, action)]
+        no_restore: bool,
+    },
+    Delete {
+        game: String,
+        save: String,
+    },
+    List {
+        game: Option<String>,
     },
 }
 
-fn main() -> Result<(), BalSaveError> {
+pub fn root_dir() -> Result<PathBuf> {
+    match std::env::home_dir() {
+        Some(h) => return Ok(h.join(".local/share/gemsave/")),
+        None => return Err(GemError::HomeNotFound),
+    }
+}
+
+fn game_dir(name: &str) -> Result<PathBuf> {
+    Ok(root_dir()?.join(name))
+}
+
+fn save_path(game: &str, save: &str) -> Result<PathBuf> {
+    Ok(game_dir(game)?.join(format!("{}.save", save)))
+}
+
+fn prompt(text: &str) -> Result<bool> { 
+    println!("{text}");
+    println!("y/n: ");
+
+    let mut input = String::new();
+    std::io::stdin().read_line(&mut input)?;
+
+    let confirmation = input.trim().to_lowercase();
+    Ok(confirmation == "y" || confirmation == "yes")
+}
+
+fn main() -> Result<()> {
     let args = Args::parse();
 
     match args.command {
-        Commands::Save { name, slot, force } => handle_save(name, slot, force),
-        Commands::Load { name, slot, force } => handle_load(name, slot, force),
-        Commands::List => handle_list(),
-        Commands::Remove { name, force } => handle_remove(name, force),
+        Commands::Add { name, path, force } => add(&name, path, force),
+        Commands::Remove { name } => remove(&name),
+        Commands::Save { game, save, force } => crate::save(&game, &save, force),
+        Commands::Load { game, save, no_restore } => load(&game, &save, !no_restore),
+        Commands::Delete { game, save } => delete(&game, &save),
+        Commands::List { game } => match game {
+            Some(g) => save_list(&g),
+            None => game_list(),
+        },
     }
+}
+
+
+fn add(
+    game: &str, 
+    target: PathBuf, 
+    force: bool,
+) -> Result<()> {
+    let mut registry = Registry::load()?;
+
+    if registry.contains(game) {
+        if !force && !prompt("Game already exists. Overwrite?")? {
+            return Ok(())
+        }
+    }
+
+    registry.insert(game.to_owned(), target)?;
+    registry.save()?;
+    
+    Ok(())
+}
+
+fn remove(game: &str) -> Result<()> {
+    let mut registry = Registry::load()?;
+
+    if !registry.contains(game) {
+        return Err(GemError::GameNotFound);
+    }
+
+    registry.remove(game)?;
+    registry.save()?;
+    
+    Ok(())
+}
+
+fn save(
+    game: &str, 
+    save: &str, 
+    force: bool
+) -> Result<()> {
+    let registry = Registry::load()?;
+    let src = registry.get(game).ok_or(GemError::GameNotFound)?;
+    let dst = save_path(game, save)?;
+
+    if dst.exists() {
+        if !force && !prompt("Save already exists. Overwrite?\ny/n: ")? {
+            return Ok(())
+        }
+    }
+
+    fs::copy(src, dst)?;
+
+    Ok(())
+}
+
+fn load(
+    game: &str, 
+    save: &str,
+    restore: bool,
+) -> Result<()> {
+    let registry = Registry::load()?;
+    let mut src = game_dir(game)?;
+    if !src.exists() {
+        return Err(GemError::GameNotFound);
+    }
+    src.push(format!("{}.save", save));
+    if !src.exists() {
+        return Err(GemError::SaveNotFound)
+    }
+    let dst = registry.get(game).ok_or(GemError::GameNotFound)?;
+
+    if dst.exists() && restore {
+        crate::save(game, "restore", true)?;
+    }
+
+    fs::copy(src, dst)?;
+
+    Ok(())
+}
+
+fn delete(game: &str, save: &str) -> Result<()> {
+    let mut path = game_dir(game)?;
+    if !path.exists() {
+        return Err(GemError::GameNotFound);
+    }
+
+    path.push(format!("{}.save", save));
+    if !path.exists() {
+        return Err(GemError::SaveNotFound)
+    }
+
+    fs::remove_file(&path)?;
+
+    Ok(())
+}
+
+fn game_list() -> Result<()> {
+    for entry in read_dir(root_dir()?)? {
+        let entry = entry?;
+
+        // Skip Registry
+        if entry.file_name() == "games.json" {
+            continue;
+        }
+
+        println!("{}", entry.file_name().display());
+    }
+
+    Ok(())
+}
+
+fn save_list(game: &str) -> Result<()> {
+    for entry in read_dir(game_dir(game)?)? {
+        let entry = entry?;
+
+        println!("{}", entry.file_name().display());
+    }
+
+    Ok(())
 }

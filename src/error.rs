@@ -1,36 +1,48 @@
-use std::io;
+macro_rules! errs {
+    (
+        $(
+            $name:ident $( : $error_type:ty )?
+        ),* $(,)?
+    ) => {
+        #[derive(Debug)]
+        pub enum GemError {
+            $(
+                $name $(($error_type))?
+            ),*
+        }
 
-#[derive(Debug)]
-pub enum BalSaveError {
-    Io(io::Error),
-    Clap(clap::Error),
-    Path(String),
-    Validation(String),
-    UserCancellation,
+        $(
+            $(
+                impl From<$error_type> for GemError {
+                    fn from(value: $error_type) -> Self {
+                        GemError::$name(value)
+                    }
+                }
+            )?
+        )*
+    };
 }
 
-impl std::error::Error for BalSaveError {}
+errs!(
+    HomeNotFound,
+    GameNotFound,
+    SaveNotFound,
+    NoGamesConfigured,
+    Json: serde_json::Error,
+    Io: std::io::Error,
+);
 
-impl std::fmt::Display for BalSaveError {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+impl std::fmt::Display for GemError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            BalSaveError::Io(err) => write!(f, "I/O Error: {}", err),
-            BalSaveError::Clap(err) => write!(f, "Argument Error: {}", err),
-            BalSaveError::Path(msg) => write!(f, "Pathing Error: {}", msg),
-            BalSaveError::Validation(msg) => write!(f, "Validation Error: {}", msg),
-            BalSaveError::UserCancellation => write!(f, "Operation cancelled by user."),
+            GemError::HomeNotFound => write!(f, "Home directory not located"),
+            GemError::GameNotFound => write!(f, "Game not found"),
+            GemError::SaveNotFound => write!(f, "Save not found"),
+            GemError::NoGamesConfigured => write!(f, "No games configured yet"),
+            GemError::Io(error) => write!(f, "IOError: {}", error),
+            GemError::Json(error) => write!(f, "JSONError: {}", error),
         }
     }
 }
 
-impl From<io::Error> for BalSaveError {
-    fn from(err: io::Error) -> Self {
-        BalSaveError::Io(err)
-    }
-}
-
-impl From<clap::Error> for BalSaveError {
-    fn from(err: clap::Error) -> Self {
-        BalSaveError::Clap(err)
-    }
-}
+pub type Result<T> = std::result::Result<T, GemError>;
